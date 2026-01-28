@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: dbconsultoria/mysql-mydb:1.0
+    #image: mysql:8.0
+    container_name: mysql_mydb
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: mypswd
+      MYSQL_DATABASE: mydb
+      MYSQL_USER: myusr
+      MYSQL_PASSWORD: mypswd
+
+    ports:
+      - "3306:3306"
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+      #- ./dump.sql:/docker-entrypoint-initdb.d/dump.sql
+      - D:/Github/myspark/mysql/dump.sql:/docker-entrypoint-initdb.d/dump.sql
+
+volumes:
+  mysql_data:
+    driver: local
