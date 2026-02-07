@@ -4,7 +4,7 @@ from pyspark.sql.functions import current_timestamp, lit
 # Create Spark session
 spark = (
     SparkSession.builder
-    .appName("bronze_tbcategories")
+    .appName("bronze_tbcustomers")
     .getOrCreate()
 )
 
@@ -21,7 +21,7 @@ df = (
     spark.read
     .jdbc(
         url=jdbc_url,
-        table="tbcategories",
+        table="tbcustomers",
         properties=jdbc_properties
     )
 )
@@ -38,7 +38,7 @@ df_bronze = (
     df_bronze
     .write
     .mode("overwrite")  # full reload Bronze
-    .parquet("file:///data/bronze/mysql/tbcategories")
+    .parquet("file:///data/bronze/mysql/tbcustomers")
 )
 
 spark.stop()
