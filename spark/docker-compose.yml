@@ -1,0 +1,20 @@
+services:
+  spark:
+    image: wlcamargo/spark-master:latest
+    container_name: spark_master
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+    volumes:
+      - D:/Github/myspark/spark/lakehouse:/data
+      - D:/Github/myspark/spark/jobs:/opt/spark/jobs
+
+    networks:
+      - lakehouse_net
+
+networks:
+  lakehouse_net:
+    external: true

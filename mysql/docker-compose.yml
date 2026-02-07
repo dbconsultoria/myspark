@@ -19,6 +19,13 @@ services:
       - mysql_data:/var/lib/mysql
       - D:/Github/myspark/mysql/dump.sql:/docker-entrypoint-initdb.d/dump.sql
 
+    networks:
+      - lakehouse_net
+
 volumes:
   mysql_data:
     driver: local
+
+networks:
+  lakehouse_net:
+    external: true
