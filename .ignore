@@ -5,3 +5,4 @@ _SUCCESS
 *.iml
 *.parquet
 *.ipynb_checkpoints
+spark/lakehouse/
