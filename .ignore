@@ -1,6 +1,7 @@
 .idea
 *.crc
 _SUCCESS
+._SUCCESS.crc
 *.xml
 *.iml
 *.parquet
