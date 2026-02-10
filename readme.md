@@ -12,6 +12,8 @@ se existe erro aqui, provavelmente é erro de rede entre o spark e mysql. verifi
 
 # Para rodar os jobs
 docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tbcategories.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tbcategories.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/gold_dim_categories_scd2.py
 
 # Acessar os notebooks
 http://localhost:8888
