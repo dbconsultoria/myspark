@@ -1,0 +1,7 @@
+.idea
+*.crc
+_SUCCESS
+*.xml
+*.iml
+*.parquet
+*.ipynb_checkpoints
