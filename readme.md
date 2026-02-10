@@ -14,7 +14,7 @@ Under spark folder create:
 ## 1 - Creating docker network (mandatory)
 docker network create lakehouse_net
 
-## 2 - Dowload and run docker for mysql, spark e notebook
+## 2 - Download and run docker for mysql, spark e notebook
 cd <spark and mysql folders> 
 docker compose up -d
 
