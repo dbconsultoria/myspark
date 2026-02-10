@@ -1,8 +1,15 @@
 # MySpark Project
 
 After doing so many courses and trying so many resources to learn spark and medallion architecture, I decided to build my own project and do my own scripts to learn that the best way I can.
-
 I did add some of my own ideas, usually people dont do SCD 2 on spark, but I thought it would add some flash to it.
+
+Under spark folder create:
+
+- spark 
+  - lakehouse
+      - bronze
+      - silver
+      - gold
 
 ## 1 - Creating docker network (mandatory)
 docker network create lakehouse_net
