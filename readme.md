@@ -18,6 +18,12 @@ docker network create lakehouse_net
 cd <spark and mysql folders> 
 docker compose up -d
 
+## 2.1 - Check for notebook token
+docker logs spark_notebook
+look for 
+[I 2026-02-15 12:22:46.247 ServerApp] http://99f0a9bdf122:8888/lab?token=99999...
+[I 2026-02-15 12:22:46.247 ServerApp]     http://127.0.0.1:8888/lab?token=99999...
+
 ## 3 - Test spark connection to mysql
 docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/test_mysql.py
 

@@ -6,4 +6,8 @@ _SUCCESS
 *.iml
 *.parquet
 *.ipynb_checkpoints
-spark/lakehouse/
+spark/lakehouse/**
+**/lakehouse/**
+# Spark / Hadoop generated files
+*.crc
+_SUCCESS*
