@@ -35,6 +35,7 @@ Data Engineer
 - **MySQL 8.0** - Source database (OLTP)
 - **Docker & Docker Compose** - Containerization and orchestration
 - **Jupyter Notebook** - Exploratory analysis
+- **Apache Airflow 2.9.1** - Pipeline orchestration
 - **Parquet** - Columnar storage format
 
 ### Medallion Architecture
@@ -200,6 +201,12 @@ myspark/
 │   │   ├── silver/                  # Clean data
 │   │   └── gold/                    # Dimensional model
 │   └── work/                        # Jupyter notebooks
+├── airflow/
+│   ├── dags/
+│   │   ├── dag_lakehouse_pipeline.py  # Full pipeline DAG
+│   │   └── dag_test_tbcategories.py   # Test DAG (categories only)
+│   ├── logs/
+│   └── plugins/
 └── mysql/
     ├── docker-compose.yml
     └── init/
@@ -227,6 +234,11 @@ docker network create lakehouse_net
 Inside the `spark/` folder, create:
 ```bash
 mkdir -p lakehouse/bronze lakehouse/silver lakehouse/gold
+```
+
+Inside the `airflow/` folder, create:
+```bash
+mkdir -p airflow/dags airflow/logs airflow/plugins
 ```
 
 #### 3. Start MySQL and Spark containers
@@ -459,6 +471,59 @@ ORDER BY revenue DESC
 
 ---
 
+## 🌀 Airflow Orchestration
+
+Apache Airflow was added to the project to automate and orchestrate the full Medallion pipeline, replacing manual execution of each Spark job.
+
+### Setup
+
+Airflow runs as part of the same `docker-compose.yml` alongside Spark, sharing the `lakehouse_net` network. It uses **PostgreSQL** as its metadata database and the **LocalExecutor**.
+
+Services added:
+- `postgres` — Airflow metadata database
+- `airflow-init` — initializes the database and creates the admin user
+- `airflow-webserver` — UI available at `http://localhost:8081`
+- `airflow-scheduler` — monitors and triggers DAG runs
+
+**Access:**
+| Service | URL | Credentials |
+|---|---|---|
+| Airflow UI | http://localhost:8081 | admin / admin |
+
+### DAGs
+
+#### `lakehouse_pipeline`
+Full pipeline executing all tables across all three layers in the correct dependency order. Triggered manually (`schedule_interval=None`).
+
+**Execution flow:**
+```
+bronze_categories  → silver_categories  → gold_dim_categories  ──┐
+bronze_customers   → silver_customers   → gold_dim_customers   ──┤
+bronze_products    → silver_products    → gold_dim_products    ──┼──► gold_fact_orders
+bronze_orders      → silver_orders      ────────────────────────────┤
+bronze_orderdetail → silver_orderdetail ────────────────────────────┘
+```
+
+Each layer runs in parallel within itself. `gold_fact_orders` only starts after all dimensions and the silver orders/orderdetail tasks are complete.
+
+#### `test_tbcategories`
+Simplified DAG for testing the pipeline with a single table (`tbcategories`), running bronze → silver → gold in sequence. Useful for validating the environment without triggering the full pipeline.
+
+### How Spark jobs are submitted
+
+Airflow uses `BashOperator` to invoke `spark-submit` directly inside the `spark_master` container via `docker exec`:
+
+```bash
+docker exec spark_master spark-submit \
+  --master local[*] \
+  --packages com.mysql:mysql-connector-j:8.0.33 \
+  /opt/spark/jobs/<job_file>.py
+```
+
+This approach avoids the need to install Spark inside the Airflow container.
+
+---
+
 ## 🎓 Learning Outcomes and Applied Techniques
 
 ### Data Engineering
@@ -469,6 +534,7 @@ ORDER BY revenue DESC
 - ✅ Surrogate Keys and Business Keys
 - ✅ Fact and dimension tables
 - ✅ Data quality validation
+- ✅ Pipeline orchestration with Apache Airflow
 
 ### Apache Spark / PySpark
 - ✅ DataFrames API
@@ -491,7 +557,7 @@ ORDER BY revenue DESC
 
 ## 🔧 Future Improvements
 
-- [ ] Airflow for automatic orchestration
+- [x] Airflow for automatic orchestration
 - [ ] Data quality framework (Great Expectations)
 - [ ] Optimized partitioning by date
 - [ ] Automated testing (pytest)
@@ -513,6 +579,7 @@ This project was developed for educational and personal portfolio purposes.
 ## 💬 Contact
 
 **Rodrigo Ribeiro**  
+Data Engineer  
 LinkedIn: [https://www.linkedin.com/in/rodrigo-ribeiro-pro/](https://www.linkedin.com/in/rodrigo-ribeiro-pro/)
 
 ---
