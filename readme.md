@@ -557,7 +557,6 @@ This approach avoids the need to install Spark inside the Airflow container.
 
 ## 🔧 Future Improvements
 
-- [x] Airflow for automatic orchestration
 - [ ] Data quality framework (Great Expectations)
 - [ ] Optimized partitioning by date
 - [ ] Automated testing (pytest)
