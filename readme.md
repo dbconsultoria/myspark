@@ -38,6 +38,8 @@ Data Engineer
 - **Apache Airflow 2.9.1** - Pipeline orchestration
 - **Parquet** - Columnar storage format
 
+![Alt text](myspark_architecture.png)
+
 ### Medallion Architecture
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
