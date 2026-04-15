@@ -29,6 +29,23 @@ services:
     depends_on:
       - spark-master
 
+  kyuubi:
+    image: apache/kyuubi:1.10.3-spark  # has Spark bundled in
+    container_name: kyuubi
+    restart: unless-stopped
+    ports:
+      - "10009:10009"
+      - "10099:10099"
+    environment:
+      - SPARK_HOME=/opt/kyuubi/externals/spark-3.5.2-bin-hadoop3
+    volumes:
+      - ./kyuubi-defaults.conf:/opt/kyuubi/conf/kyuubi-defaults.conf
+      - D:/Github/myspark/spark/lakehouse:/data
+    depends_on:
+      - spark-master
+    networks:
+      - lakehouse_net
+
   postgres:
     image: postgres:15
     container_name: airflow_postgres

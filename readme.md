@@ -22,6 +22,7 @@ Data Engineer
 - Process data with **Apache Spark** using PySpark
 - Orchestrate complete environment with **Docker**
 - Validate data quality across layers
+- Query the lakehouse via SQL IDE using **Apache Kyuubi**
 - Demonstrate Data Engineering best practices
 
 ---
@@ -30,12 +31,14 @@ Data Engineer
 
 ### Technologies Used
 
-- **Apache Spark 3.3.1** - Distributed data processing
+- **Apache Spark 3.5** - Distributed data processing
 - **PySpark** - Python API for Spark
 - **MySQL 8.0** - Source database (OLTP)
 - **Docker & Docker Compose** - Containerization and orchestration
 - **Jupyter Notebook** - Exploratory analysis
 - **Apache Airflow 2.9.1** - Pipeline orchestration
+- **Apache Kyuubi 1.10.3** - SQL gateway for JDBC/ODBC access to Spark
+- **DBeaver** - SQL IDE connected to the lakehouse via Kyuubi
 - **Parquet** - Columnar storage format
 
 ![Alt text](myspark_architecture.png)
@@ -47,6 +50,18 @@ Data Engineer
 │   (OLTP)    │      │  Raw Data   │      │  Cleaned    │      │  Business   │
 └─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘
    Source            Ingestion           Validation         DW Modeling
+                                                                    │
+                                                                    ▼
+                                                           ┌─────────────────┐
+                                                           │  Apache Kyuubi  │
+                                                           │  (SQL Gateway)  │
+                                                           └────────┬────────┘
+                                                                    │ JDBC
+                                                                    ▼
+                                                           ┌─────────────────┐
+                                                           │     DBeaver     │
+                                                           │   (SQL IDE)     │
+                                                           └─────────────────┘
 ```
 
 #### 🥉 **Bronze Layer (Raw Data)**
@@ -184,11 +199,91 @@ A product had its price changed:
 
 ---
 
+## 🔌 Apache Kyuubi — SQL Gateway
+
+[Apache Kyuubi](https://kyuubi.apache.org/) is a distributed SQL gateway that exposes Spark via a **HiveServer2-compatible JDBC/ODBC interface**, enabling any SQL IDE (such as DBeaver) to query the lakehouse directly without replacing the Spark engine.
+
+### How it fits in the stack
+
+```
+DBeaver (SQL IDE)
+      │  JDBC (port 10009)
+      ▼
+Apache Kyuubi
+      │  spark-submit
+      ▼
+Apache Spark ──► Parquet files (Bronze / Silver / Gold)
+```
+
+Kyuubi acts as a gateway — it receives SQL queries from DBeaver, submits them to Spark, and returns the results. Unlike Trino, it does **not** replace Spark as the execution engine.
+
+### Configuration (`kyuubi-defaults.conf`)
+
+```properties
+kyuubi.engine.spark.master=spark://spark-master:7077
+kyuubi.engine.share.level=SERVER
+kyuubi.engine.type=SPARK_SQL
+spark.home=/opt/kyuubi/externals/spark-3.5.2-bin-hadoop3
+```
+
+### DBeaver Connection
+
+| Field | Value |
+|---|---|
+| Driver | Apache Hive 2 |
+| Host | `localhost` |
+| Port | `10009` |
+| Database | `default` |
+| URL | `jdbc:hive2://localhost:10009/default;connectTimeout=60000;socketTimeout=120000` |
+| Username / Password | *(leave blank)* |
+
+> **Note:** On first connection, Kyuubi needs ~15–20 seconds to launch the Spark engine. Increase DBeaver's connection timeout to at least 60 seconds to avoid premature disconnection.
+
+### Registering tables in DBeaver
+
+Since the Gold layer uses plain Parquet files (no Hive Metastore), tables must be registered per session before querying:
+
+```sql
+CREATE DATABASE IF NOT EXISTS bronze;
+CREATE DATABASE IF NOT EXISTS silver;
+CREATE DATABASE IF NOT EXISTS gold;
+
+CREATE TABLE IF NOT EXISTS gold.dim_categories  USING parquet LOCATION '/data/gold/dim_categories';
+CREATE TABLE IF NOT EXISTS gold.dim_products     USING parquet LOCATION '/data/gold/dim_products';
+CREATE TABLE IF NOT EXISTS gold.dim_customers    USING parquet LOCATION '/data/gold/dim_customers';
+CREATE TABLE IF NOT EXISTS gold.fact_orders      USING parquet LOCATION '/data/gold/fact_orders';
+```
+
+> **Note:** These registrations live in memory. If the Kyuubi container restarts, re-run the `CREATE TABLE` statements. A persistent Hive Metastore would eliminate this step and is listed as a future improvement.
+
+### Example analytical query
+
+```sql
+SELECT
+    c.customer_name,
+    p.product_description,
+    DATE_FORMAT(f.order_date, 'dd-MM-yyyy') AS date,
+    SUM(f.total_quantity) AS quantity,
+    ROUND(SUM(f.total_sales), 2) AS sales
+FROM gold.fact_orders f
+INNER JOIN gold.dim_customers c
+    ON f.customer_code = c.customer_code
+    AND c.is_current = true
+INNER JOIN gold.dim_products p
+    ON f.product_code = p.product_code
+    AND p.is_current = true
+GROUP BY c.customer_name, p.product_description, DATE_FORMAT(f.order_date, 'dd-MM-yyyy')
+ORDER BY date DESC, sales DESC
+```
+
+---
+
 ## 📁 Project Structure
 ```
 myspark/
 ├── spark/
 │   ├── docker-compose.yml
+│   ├── kyuubi-defaults.conf         # Kyuubi configuration
 │   ├── Dockerfile
 │   ├── jobs/
 │   │   ├── test_mysql.py
@@ -224,6 +319,7 @@ myspark/
 - Docker installed
 - Docker Compose installed
 - 8GB RAM available (recommended)
+- DBeaver installed (for SQL IDE access via Kyuubi)
 
 ### Initial Setup
 
@@ -266,6 +362,17 @@ Access: `http://localhost:8888` and use the token.
 
 ---
 
+### Services Overview
+
+| Service | URL | Credentials |
+|---|---|---|
+| Spark Master UI | http://localhost:8080 | — |
+| Jupyter Notebook | http://localhost:8888 | token from logs |
+| Airflow UI | http://localhost:8081 | admin / admin |
+| Kyuubi JDBC | localhost:10009 | — |
+
+---
+
 ### Execution Pipeline
 
 #### **MySQL Connection Test**
@@ -276,73 +383,26 @@ docker exec -it spark_master spark-submit \
   /opt/spark/jobs/test_mysql.py
 ```
 
-**Common errors:**
-- Missing network → Check step 1
-- Credentials → Check script configuration
-
 ---
 
 #### **Bronze Layer - Ingestion**
 ```bash
-# Categories
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/bronze_tbcategories.py
-
-# Products
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/bronze_tbproducts.py
-
-# Customers
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/bronze_tbcustomers.py
-
-# Orders
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/bronze_tborders.py
-
-# Order Details
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/bronze_tborderdetail.py
+docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tbcategories.py
+docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tbproducts.py
+docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tbcustomers.py
+docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tborders.py
+docker exec -it spark_master spark-submit --master local[*] --packages com.mysql:mysql-connector-j:8.0.33 /opt/spark/jobs/bronze_tborderdetail.py
 ```
 
 ---
 
 #### **Silver Layer - Cleansing and Validation**
 ```bash
-# Categories
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/silver_tbcategories.py
-
-# Products
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/silver_tbproducts.py
-
-# Customers
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/silver_tbcustomers.py
-
-# Orders
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/silver_tborders.py
-
-# Order Details
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/silver_tborderdetail.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tbcategories.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tbproducts.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tbcustomers.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tborders.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/silver_tborderdetail.py
 ```
 
 ---
@@ -351,56 +411,25 @@ docker exec -it spark_master spark-submit \
 
 **Dimensions with SCD Type 2:**
 ```bash
-# Categories Dimension
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/gold_dim_categories_scd2.py
-
-# Products Dimension
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/gold_dim_products_scd2.py
-
-# Customers Dimension
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/gold_dim_customers_scd2.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/gold_dim_categories_scd2.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/gold_dim_products_scd2.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/gold_dim_customers_scd2.py
 ```
 
 **Fact Table:**
 ```bash
-# Sales Fact
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/gold_fact_orders.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/gold_fact_orders.py
 ```
 
 ---
 
 ### 📖 Read and Analysis Scripts
 ```bash
-# Read dimensions
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/read_gold_dim_categories.py
-
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/read_gold_dim_products.py
-
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/read_gold_dim_customers.py
-
-# Read fact table with analysis
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/read_gold_fact_orders.py
-
-# Customizable generic query
-docker exec -it spark_master spark-submit \
-  --master local[*] \
-  /opt/spark/jobs/generic_query.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/read_gold_dim_categories.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/read_gold_dim_products.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/read_gold_dim_customers.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/read_gold_fact_orders.py
+docker exec -it spark_master spark-submit --master local[*] /opt/spark/jobs/generic_query.py
 ```
 
 ---
@@ -411,7 +440,6 @@ docker exec -it spark_master spark-submit \
 
 Execute equivalent SQL queries in MySQL to validate totals:
 ```sql
--- Example: Top 10 customers by revenue
 SELECT 
     o.customer AS customer_code,
     COUNT(DISTINCT o.code) AS total_orders,
@@ -440,15 +468,15 @@ LIMIT 10;
 SELECT
     c.customer_name,
     p.product_description,
-    DATE_FORMAT(f.order_date, 'dd-MM-yyyy') as date,
-    SUM(f.total_quantity) as quantity,
-    ROUND(SUM(f.total_sales), 2) as sales
-FROM fact_orders f
-INNER JOIN dim_customers c 
-    ON f.customer_code = c.customer_code 
+    DATE_FORMAT(f.order_date, 'dd-MM-yyyy') AS date,
+    SUM(f.total_quantity) AS quantity,
+    ROUND(SUM(f.total_sales), 2) AS sales
+FROM gold.fact_orders f
+INNER JOIN gold.dim_customers c
+    ON f.customer_code = c.customer_code
     AND c.is_current = true
-INNER JOIN dim_products p 
-    ON f.product_code = p.product_code 
+INNER JOIN gold.dim_products p
+    ON f.product_code = p.product_code
     AND p.is_current = true
 GROUP BY c.customer_name, p.product_description, DATE_FORMAT(f.order_date, 'dd-MM-yyyy')
 ORDER BY date DESC, sales DESC
@@ -458,14 +486,14 @@ ORDER BY date DESC, sales DESC
 ```sql
 SELECT
     cat.category_description,
-    COUNT(DISTINCT f.order_code) as total_orders,
-    ROUND(SUM(f.total_sales), 2) as revenue
-FROM fact_orders f
-INNER JOIN dim_products p 
-    ON f.product_code = p.product_code 
+    COUNT(DISTINCT f.order_code) AS total_orders,
+    ROUND(SUM(f.total_sales), 2) AS revenue
+FROM gold.fact_orders f
+INNER JOIN gold.dim_products p
+    ON f.product_code = p.product_code
     AND p.is_current = true
-INNER JOIN dim_categories cat 
-    ON p.category_code = cat.category_code 
+INNER JOIN gold.dim_categories cat
+    ON p.category_code = cat.category_code
     AND cat.is_current = true
 GROUP BY cat.category_description
 ORDER BY revenue DESC
@@ -475,22 +503,11 @@ ORDER BY revenue DESC
 
 ## 🌀 Airflow Orchestration
 
-Apache Airflow was added to the project to automate and orchestrate the full Medallion pipeline, replacing manual execution of each Spark job.
+Apache Airflow automates and orchestrates the full Medallion pipeline, replacing manual execution of each Spark job.
 
 ### Setup
 
 Airflow runs as part of the same `docker-compose.yml` alongside Spark, sharing the `lakehouse_net` network. It uses **PostgreSQL** as its metadata database and the **LocalExecutor**.
-
-Services added:
-- `postgres` — Airflow metadata database
-- `airflow-init` — initializes the database and creates the admin user
-- `airflow-webserver` — UI available at `http://localhost:8081`
-- `airflow-scheduler` — monitors and triggers DAG runs
-
-**Access:**
-| Service | URL | Credentials |
-|---|---|---|
-| Airflow UI | http://localhost:8081 | admin / admin |
 
 ### DAGs
 
@@ -506,23 +523,8 @@ bronze_orders      → silver_orders      ────────────�
 bronze_orderdetail → silver_orderdetail ────────────────────────────┘
 ```
 
-Each layer runs in parallel within itself. `gold_fact_orders` only starts after all dimensions and the silver orders/orderdetail tasks are complete.
-
 #### `test_tbcategories`
-Simplified DAG for testing the pipeline with a single table (`tbcategories`), running bronze → silver → gold in sequence. Useful for validating the environment without triggering the full pipeline.
-
-### How Spark jobs are submitted
-
-Airflow uses `BashOperator` to invoke `spark-submit` directly inside the `spark_master` container via `docker exec`:
-
-```bash
-docker exec spark_master spark-submit \
-  --master local[*] \
-  --packages com.mysql:mysql-connector-j:8.0.33 \
-  /opt/spark/jobs/<job_file>.py
-```
-
-This approach avoids the need to install Spark inside the Airflow container.
+Simplified DAG for testing the pipeline with a single table (`tbcategories`), running bronze → silver → gold in sequence.
 
 ---
 
@@ -537,6 +539,7 @@ This approach avoids the need to install Spark inside the Airflow container.
 - ✅ Fact and dimension tables
 - ✅ Data quality validation
 - ✅ Pipeline orchestration with Apache Airflow
+- ✅ SQL IDE access to lakehouse via Apache Kyuubi
 
 ### Apache Spark / PySpark
 - ✅ DataFrames API
@@ -559,6 +562,7 @@ This approach avoids the need to install Spark inside the Airflow container.
 
 ## 🔧 Future Improvements
 
+- [ ] Hive Metastore for persistent table registration (eliminate per-session CREATE TABLE)
 - [ ] Data quality framework (Great Expectations)
 - [ ] Optimized partitioning by date
 - [ ] Automated testing (pytest)
